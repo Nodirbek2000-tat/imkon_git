@@ -1,0 +1,97 @@
+# Imkon — nginx
+#
+# MARSHRUTLAR:
+#   /api/...        -> FRONTEND (Next.js), Django EMAS — kirish cookie'lari
+#                      Next proxy'sida tokenga aylanadi
+#   /tizim-admin/   -> backend (Django admini)
+#   /static/        -> Django statikasi
+#   /media/         -> yuklangan rasmlar
+#   qolgan hammasi  -> frontend
+#
+# Frontend va bot ALOHIDA compose loyihalari. Shuning uchun manzillar
+# o'zgaruvchi orqali, har so'rovda hal qilinadi: frontend hali ko'tarilmagan
+# bo'lsa ham nginx ishga tushaveradi (aks holda "host not found" bilan yiqiladi).
+
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+# ------------------------------------------------------------------ HTTP
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN} www.${DOMAIN};
+
+    # Let's Encrypt tekshiruvi — HTTPS'ga yo'naltirilmasligi SHART
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://${DOMAIN}$request_uri;
+    }
+}
+
+# ---------------------------------------------------- www -> asosiy domen
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name www.${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    include /etc/nginx/snippets/ssl.conf;
+
+    return 301 https://${DOMAIN}$request_uri;
+}
+
+# ----------------------------------------------------------------- HTTPS
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    include /etc/nginx/snippets/ssl.conf;
+    include /etc/nginx/snippets/security.conf;
+
+    client_max_body_size 20M;
+
+    set $frontend http://frontend:3000;
+    set $backend  http://backend:8000;
+
+    location /media/ {
+        alias /var/www/media/;
+        expires 30d;
+        access_log off;
+    }
+
+    location /static/ {
+        alias /var/www/static/;
+        expires 30d;
+        access_log off;
+    }
+
+    location /tizim-admin/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $backend;
+    }
+
+    location /api/docs/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $backend;
+    }
+
+    location /api/schema/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $backend;
+    }
+
+    # `/api/` ham shu yerga tushadi — yuqoridagi izohga qarang
+    location / {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $frontend;
+    }
+}

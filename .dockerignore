@@ -1,0 +1,23 @@
+# Образга tushmasligi kerak bo'lgan narsalar
+
+venv/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Local baza — serverda Postgres ishlatiladi
+db.sqlite3
+db.sqlite3-journal
+
+# Sirlar konteynerga NUSXALANMAYDI — ular `docker compose` orqali
+# muhit o'zgaruvchisi sifatida beriladi
+.env
+
+# Local yuklangan fayllar va yig'ilgan statika — ular volume'da yashaydi
+media/
+staticfiles/
+
+.idea/
+.vscode/
+.git/
+.gitignore

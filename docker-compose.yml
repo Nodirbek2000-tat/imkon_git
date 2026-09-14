@@ -1,0 +1,92 @@
+# Imkon BACKEND — baza + Django + nginx + SSL
+#
+# Bu repo BIRINCHI ishga tushiriladi: u `imkon_net` tarmog'ini yaratadi,
+# frontend va bot shu tarmoqqa ulanadi.
+#
+#   docker compose build
+#   docker compose up -d
+
+name: imkon-backend
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # Nomlangan volume — build/pull/restart'da ma'lumot o'chmaydi.
+      # `docker compose down -v` YOZMANG: -v bazani o'chiradi.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [imkon_net]
+
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    volumes:
+      - media:/app/media
+      - static:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [imkon_net]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - media:/var/www/media:ro
+      - static:/var/www/static:ro
+      - certbot-conf:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    environment:
+      DOMAIN: ${DOMAIN}
+    # Har 6 soatda qayta o'qiydi — yangilangan SSL kuchga kirsin
+    command: >
+      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done &
+             nginx -g 'daemon off;'"
+    depends_on:
+      - backend
+    networks: [imkon_net]
+
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot-conf:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    # Har 12 soatda tekshiradi, muddati yaqin bo'lsa o'zi yangilaydi
+    entrypoint: >
+      sh -c "trap exit TERM;
+      while :; do
+        certbot renew --webroot -w /var/www/certbot --quiet;
+        sleep 12h & wait $${!};
+      done"
+    networks: [imkon_net]
+
+networks:
+  imkon_net:
+    # Qat'iy nom — frontend va bot repolari aynan shu nom bilan ulanadi
+    name: imkon_net
+
+volumes:
+  pgdata:
+  media:
+  static:
+  certbot-conf:
+  certbot-www:

@@ -25,6 +25,11 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+# entrypoint'ga huquq Docker ichida beriladi — git/Windows fayl huquqini
+# yo'qotib qo'yadi ("permission denied"). CRLF qator oxirlari ham
+# tozalanadi, aks holda `#!/bin/sh` topilmaydi.
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
 # Root'dan ishlamaymiz: konteyner buzilsa ham zarari cheklangan bo'lsin
 RUN useradd --create-home --uid 1000 imkon \
     && mkdir -p /app/media /app/staticfiles \
@@ -37,7 +42,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD curl -fs http://localhost:8000/api/categories/ >/dev/null || exit 1
 
-COPY --chown=imkon:imkon entrypoint.sh /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # `--workers 3` — kichik serverga mos. Ko'proq yadro bo'lsa oshiring.

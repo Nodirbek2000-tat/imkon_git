@@ -32,9 +32,11 @@ echo "==> Soxtasini o'chirib, haqiqiysini olamiz..."
 docker compose run --rm --entrypoint sh certbot -c \
   "rm -rf '$LIVE' /etc/letsencrypt/archive/$DOMAIN /etc/letsencrypt/renewal/$DOMAIN.conf"
 
+# `--non-interactive` — certbot savol bersa javob kutib osilib qolmasin
 docker compose run --rm certbot certonly \
   --webroot -w /var/www/certbot \
   --email "$SSL_EMAIL" --agree-tos --no-eff-email \
+  --non-interactive \
   -d "$DOMAIN" -d "www.$DOMAIN"
 
 docker compose exec nginx nginx -s reload

@@ -56,10 +56,16 @@ services:
       - certbot-www:/var/www/certbot:ro
     environment:
       DOMAIN: ${DOMAIN}
-    # Har 6 soatda qayta o'qiydi — yangilangan SSL kuchga kirsin
+    # Har 6 soatda qayta o'qiydi — yangilangan SSL kuchga kirsin.
+    #
+    # MUHIM: oxirida `/docker-entrypoint.sh nginx ...` chaqiriladi. Obraz
+    # `templates/*.template` ni FAQAT buyruq `nginx` bo'lganda konfigga
+    # aylantiradi — `sh -c` ning o'zi bilan shablon qayta ishlanmay qolardi
+    # va "Welcome to nginx!" standart sahifasi chiqardi.
     command: >
-      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done &
-             nginx -g 'daemon off;'"
+      sh -c "rm -f /etc/nginx/conf.d/default.conf;
+             while :; do sleep 6h & wait $${!}; nginx -s reload; done &
+             exec /docker-entrypoint.sh nginx -g 'daemon off;'"
     depends_on:
       - backend
     networks: [imkon_net]

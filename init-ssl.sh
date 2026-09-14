@@ -32,8 +32,11 @@ echo "==> Soxtasini o'chirib, haqiqiysini olamiz..."
 docker compose run --rm --entrypoint sh certbot -c \
   "rm -rf '$LIVE' /etc/letsencrypt/archive/$DOMAIN /etc/letsencrypt/renewal/$DOMAIN.conf"
 
-# `--non-interactive` — certbot savol bersa javob kutib osilib qolmasin
-docker compose run --rm certbot certonly \
+# `--entrypoint certbot` SHART: compose'dagi certbot xizmatining entrypoint'i
+# abadiy yangilash tsikli (`sleep 12h`). Almashtirilmasa `certonly` o'rniga
+# o'sha tsikl ishlab, skript 12 soat osilib qoladi.
+# `--non-interactive` — certbot savol bersa javob kutib qolmasin
+docker compose run --rm --entrypoint certbot certbot certonly \
   --webroot -w /var/www/certbot \
   --email "$SSL_EMAIL" --agree-tos --no-eff-email \
   --non-interactive \

@@ -257,7 +257,11 @@ TELEGRAM_ADMIN_IDS = env.list("TELEGRAM_ADMIN_IDS", default=[])
 # ---------------------------------------------------------------- xavfsizlik
 
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+    # HTTP -> HTTPS yo'naltirishni nginx qiladi, Django EMAS. Django'ga bot
+    # va Next ichki tarmoqdan `http://backend:8000` orqali murojaat qiladi —
+    # `True` bo'lsa ularni `https://backend:8000` ga yo'naltirib, butun
+    # bot va sayt API'sini ishdan chiqarardi (Django tashqariga ochiq emas).
+    SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=False)
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31_536_000

@@ -14,6 +14,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Sum
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.artisans.models import ArtisanProfile
@@ -163,12 +164,18 @@ def _credit_sellers(order: Order) -> None:
 
     Bitta buyurtmada bir nechta sotuvchi bo'lishi mumkin — shuning uchun
     sotuvchi bo'yicha guruhlanadi va har biriga bitta tranzaksiya yoziladi.
+
+    O'quvchining puli MAKTAB balansiga tushadi: o'quvchi akkaunti telefonsiz
+    va parolsiz, u tizimga kira olmaydi — unga yozilgan pulni hech kim
+    ko'ra ham, ishlata ham olmasdi. `Coalesce` shuni hal qiladi: maktab
+    bo'lsa maktabning user'i, bo'lmasa (oddiy hunarmand) o'zining user'i.
     """
     totals = (
         OrderItem.objects.filter(order=order, artisan__isnull=False)
-        .values("artisan__user")
+        .annotate(owner_user=Coalesce("artisan__school__user_id", "artisan__user_id"))
+        .values("owner_user")
         .annotate(gross=Sum(F("price") * F("quantity")))
-        .values_list("artisan__user", "gross")
+        .values_list("owner_user", "gross")
     )
 
     for user_id, gross in totals:
@@ -214,10 +221,11 @@ def _notify_approved(payment: Payment) -> None:
     )
 
     notified = set()
-    for item in order.items.select_related("artisan__user").all():
+    for item in order.items.select_related("artisan__user", "artisan__school__user").all():
         if not item.artisan_id:
             continue
-        user = item.artisan.user
+        # O'quvchining sotuvi haqida maktab xabar oladi — pul ham unga tushdi
+        user = item.artisan.owner_user
         if user.id in notified:
             continue
         notified.add(user.id)

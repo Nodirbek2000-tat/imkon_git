@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.artisans.models import SchoolProfile
 from apps.common.permissions import IsBot
 
 from .google import GoogleAuthError, verify_google_token
@@ -18,6 +19,7 @@ from .serializers import (
     BotLoginCodeSerializer,
     GoogleLoginSerializer,
     PasswordLoginSerializer,
+    SchoolLoginSerializer,
     SendOTPSerializer,
     SetPasswordSerializer,
     TelegramCodeSerializer,
@@ -153,6 +155,64 @@ class PasswordLoginView(APIView):
         if not user.is_active:
             return Response(
                 {"detail": "Akkaunt bloklangan."}, status=status.HTTP_403_FORBIDDEN
+            )
+
+        return Response(
+            {
+                **_tokens_for(user),
+                "user": UserSerializer(user, context={"request": request}).data,
+                "is_new": False,
+            }
+        )
+
+
+class SchoolLoginView(APIView):
+    """
+    Maktab login + parol bilan kiradi.
+
+    `PasswordLoginView` dan alohida, chunki u telefon raqamini talab
+    qiladi (`USERNAME_FIELD = "phone"`), maktabda esa raqam yo'q —
+    u `SchoolProfile.login` bo'yicha topiladi.
+    """
+
+    permission_classes = (AllowAny,)
+    throttle_scope = "password_login"
+
+    @extend_schema(request=SchoolLoginSerializer, responses={200: TokenPairSerializer})
+    def post(self, request):
+        serializer = SchoolLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        login = serializer.validated_data["login"]
+        password = serializer.validated_data["password"]
+
+        invalid = Response(
+            {"detail": "Login yoki parol noto'g'ri."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+        # `authenticate()` ishlatilmaydi: u `USERNAME_FIELD = "phone"`
+        # bo'yicha qidiradi, maktabda telefon bo'sh.
+        school = SchoolProfile.objects.select_related("user").filter(login=login).first()
+
+        if school is None:
+            # `ModelBackend` dagi kabi: login topilmasa ham bitta parol
+            # hash'i hisoblanadi. Shunda javob vaqti "bu login bor" degan
+            # ishorani bermaydi.
+            User().set_password(password)
+            return invalid
+
+        user = school.user
+        if not user.check_password(password):
+            return invalid
+
+        # Ikkita bayroq ham tekshiriladi: `set_active()` ularni birga
+        # o'zgartiradi, lekin biri qo'lda o'zgartirilgan bo'lsa ham
+        # o'chirilgan maktab kirib keta olmasin.
+        if not (user.is_active and school.is_active):
+            return Response(
+                {"detail": "Maktab akkaunti bloklangan. Administrator bilan bog'laning."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         return Response(
@@ -422,9 +482,9 @@ class MeView(RetrieveUpdateAPIView):
     permission_classes = (IsAuthenticated,)
 
     def get_object(self):
-        # artisan_profile birga yuklanadi — `artisan_slug` uchun qo'shimcha
-        # so'rov ketmasin
+        # artisan_profile va school_profile birga yuklanadi — `artisan_slug`
+        # va `school_slug` uchun qo'shimcha so'rov ketmasin
         return (
-            User.objects.select_related("artisan_profile")
+            User.objects.select_related("artisan_profile", "school_profile")
             .get(pk=self.request.user.pk)
         )

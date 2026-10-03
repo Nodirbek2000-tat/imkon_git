@@ -1,7 +1,14 @@
 from django.contrib import admin, messages
 from django.utils import timezone
 
-from .models import ArtisanApplication, ArtisanProfile, Craft, Post, PostImage
+from .models import (
+    ArtisanApplication,
+    ArtisanProfile,
+    Craft,
+    Post,
+    PostImage,
+    SchoolProfile,
+)
 
 
 @admin.register(Craft)
@@ -12,11 +19,30 @@ class CraftAdmin(admin.ModelAdmin):
 
 @admin.register(ArtisanProfile)
 class ArtisanProfileAdmin(admin.ModelAdmin):
-    list_display = ("shop_name_uz", "user", "region", "products_count", "posts_count", "is_active")
-    list_filter = ("is_active", "region", "crafts")
+    list_display = (
+        "shop_name_uz", "kind", "school", "user", "region",
+        "products_count", "posts_count", "is_active",
+    )
+    list_filter = ("kind", "is_active", "school", "region", "crafts")
     search_fields = ("shop_name_uz", "user__phone", "user__full_name")
     filter_horizontal = ("crafts",)
     readonly_fields = ("products_count", "posts_count", "sold_count", "created_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("user", "school")
+
+
+@admin.register(SchoolProfile)
+class SchoolProfileAdmin(admin.ModelAdmin):
+    """
+    Zaxira yo'l. Asosiy ish saytning o'z admin panelida
+    (`/admin/maktablar`) — u yerda parol ham beriladi.
+    """
+
+    list_display = ("name_uz", "login", "region", "district", "students_count", "is_active")
+    list_filter = ("is_active", "region")
+    search_fields = ("name_uz", "login", "region", "district")
+    readonly_fields = ("slug", "students_count", "created_at")
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related("user")

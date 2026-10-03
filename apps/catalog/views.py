@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.permissions import IsArtisan, IsOwnerOrReadOnly
+from apps.common.permissions import IsArtisanOrSchool, IsOwnerOrReadOnly
 from apps.notifications.models import Notification
 
 from .favorites import Favorite
@@ -19,6 +19,22 @@ from .serializers import (
     ProductListSerializer,
     ProductWriteSerializer,
 )
+
+
+def owned_products_q(user, prefix: str = "") -> Q:
+    """
+    "Mening mahsulotlarim" sharti.
+
+    Hunarmand uchun — o'zi qo'ygan mahsulotlar. Maktab uchun — barcha
+    o'quvchilarining mahsulotlari: maktab o'z nomidan sotmaydi, u
+    o'quvchilari nomidan sotadi va ularning ishini boshqaradi.
+
+    `prefix` — `Product` dan boshqa modeldan filtrlaganda kerak,
+    masalan `Comment` uchun `"product__"`.
+    """
+    if getattr(user, "is_school", False):
+        return Q(**{f"{prefix}artisan__school__user": user})
+    return Q(**{f"{prefix}artisan__user": user})
 
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -63,10 +79,14 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             base = base.select_related("auction").prefetch_related("features")
 
-        # Hunarmand o'z qoralamalarini ham ko'radi
-        if self.request.user.is_authenticated and getattr(self.request.user, "is_artisan", False):
+        # Hunarmand (va maktab o'quvchilari nomidan) o'z qoralamalarini
+        # ham ko'radi
+        user = self.request.user
+        if user.is_authenticated and (
+            getattr(user, "is_artisan", False) or getattr(user, "is_school", False)
+        ):
             if self.request.query_params.get("mine") == "1":
-                return base.filter(artisan__user=self.request.user)
+                return base.filter(owned_products_q(user))
 
         return base.published()
 
@@ -87,8 +107,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.action in ("my_written_comments", "favorite", "my_favorites"):
             return [IsAuthenticated()]
         if self.action in ("create", "my_comments", "my_stats"):
-            return [IsArtisan()]
-        return [IsArtisan(), IsOwnerOrReadOnly()]
+            return [IsArtisanOrSchool()]
+        return [IsArtisanOrSchool(), IsOwnerOrReadOnly()]
 
     def retrieve(self, request, *args, **kwargs):
         response = super().retrieve(request, *args, **kwargs)
@@ -117,8 +137,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             comment = serializer.save(product=product, user=request.user)
 
-            # Mahsulot egasiga xabar — o'zi o'ziga izoh yozsa yubormaymiz
-            owner = product.artisan.user
+            # Mahsulot egasiga xabar — o'zi o'ziga izoh yozsa yubormaymiz.
+            # O'quvchining ishiga yozilgan izohni maktab oladi (o'quvchi
+            # tizimga kirmaydi, xabarni ko'ra olmasdi).
+            owner = product.artisan.owner_user
             if owner.id != request.user.id:
                 author = request.user.full_name or "Kimdir"
                 Notification.notify(
@@ -204,13 +226,13 @@ class ProductViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="my-comments")
     def my_comments(self, request):
         """O'z mahsulotlariga yozilgan barcha izohlar — bitta ro'yxatda."""
-        artisan = getattr(request.user, "artisan_profile", None)
+        # Maktab uchun — o'quvchilarining ishlariga yozilgan izohlar
         comments = (
-            Comment.objects.filter(product__artisan=artisan, is_hidden=False)
+            Comment.objects.filter(
+                owned_products_q(request.user, "product__"), is_hidden=False
+            )
             .select_related("product", "user")
             .order_by("-created_at")
-            if artisan is not None
-            else Comment.objects.none()
         )
         page = self.paginate_queryset(comments)
         serializer = CommentSerializer(page, many=True, context={"request": request})
@@ -232,17 +254,10 @@ class ProductViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="my-stats")
     def my_stats(self, request):
         """Sotuvchi statistikasi — mahsulotlar soni, sotilgan, daromad."""
-        artisan = getattr(request.user, "artisan_profile", None)
-        empty = {
-            "products_total": 0, "products_active": 0, "products_sold": 0,
-            "revenue_total": 0, "sold_this_month": 0, "revenue_this_month": 0,
-        }
-        if artisan is None:
-            return Response(empty)
-
         month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        stats = Product.objects.filter(artisan=artisan).aggregate(
+        # Maktab uchun — barcha o'quvchilarining yig'ma statistikasi
+        stats = Product.objects.filter(owned_products_q(request.user)).aggregate(
             products_total=Count("id"),
             products_active=Count("id", filter=Q(status=Product.Status.ACTIVE)),
             products_sold=Count("id", filter=Q(status=Product.Status.SOLD)),

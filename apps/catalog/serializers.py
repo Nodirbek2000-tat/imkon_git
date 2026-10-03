@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.artisans.models import ArtisanProfile
 from apps.common.translation import TranslatedSerializerMixin
 
 from .models import Category, Comment, Product, ProductFeature, ProductImage
@@ -27,6 +28,10 @@ class ArtisanBriefSerializer(serializers.Serializer):
     slug = serializers.CharField()
     shop_name = serializers.SerializerMethodField()
     region = serializers.CharField()
+    # Mahsulot sahifasi shunga qarab "Hunarmand" yoki "O'quvchi" deb
+    # yozadi — maktab bolasining ishini katta yoshli ustaning ishidan
+    # ajratib ko'rsatish loyihaning asosiy g'oyasi.
+    kind = serializers.CharField()
 
     def get_shop_name(self, obj) -> str:
         from apps.common.translation import resolve_language
@@ -152,15 +157,57 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text='JSON: [{"name":"Material","value":"Yong\'och"}]',
     )
+    # Maktab mahsulotni O'Z nomidan emas, o'quvchisi nomidan qo'yadi —
+    # qaysi o'quvchi ekanini shu maydon aytadi. Oddiy hunarmand uchun
+    # kerak emas (va yuborsa ham e'tiborga olinmaydi).
+    student = serializers.SlugField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        help_text="Maktab uchun: o'quvchining slug'i",
+    )
 
     class Meta:
         model = Product
         fields = (
             "id", "slug", "category", "title_uz", "title_ru", "title_en",
             "description_uz", "description_ru", "description_en",
-            "price", "stock", "status", "images", "features",
+            "price", "stock", "status", "images", "features", "student",
         )
         read_only_fields = ("id", "slug")
+
+    def validate(self, attrs):
+        """
+        Mahsulot KIMGA tegishli ekanini shu yerda hal qilamiz.
+
+        Mijoz `artisan` ni hech qachon o'zi yubormaydi — aks holda bir
+        hunarmand boshqasining nomidan mahsulot qo'yib yuborardi.
+        """
+        user = self.context["request"].user
+        slug = (attrs.pop("student", "") or "").strip()
+
+        if getattr(user, "is_school", False):
+            if slug:
+                student = ArtisanProfile.objects.filter(
+                    slug=slug,
+                    kind=ArtisanProfile.Kind.STUDENT,
+                    school__user=user,
+                ).first()
+                if student is None:
+                    raise serializers.ValidationError(
+                        {"student": "Bu o'quvchi sizning maktabingizda topilmadi."}
+                    )
+                attrs["artisan"] = student
+            elif self.instance is None:
+                raise serializers.ValidationError(
+                    {"student": "O'quvchini tanlang — mahsulot uning nomidan qo'yiladi."}
+                )
+            # Tahrirlashda o'quvchi yuborilmasa — avvalgisi o'z joyida qoladi
+
+        elif self.instance is None:
+            attrs["artisan"] = user.artisan_profile
+
+        return attrs
 
     def validate_features(self, value):
         if not value:
@@ -188,8 +235,7 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         images = validated_data.pop("images", [])
         features = validated_data.pop("features", [])
 
-        # Hunarmandni so'rovdan olamiz — mijoz o'zgartira olmasin
-        validated_data["artisan"] = self.context["request"].user.artisan_profile
+        # `artisan` ni `validate()` qo'yib bergan — mijoz yuborgan qiymat emas
         product = super().create(validated_data)
 
         if images:

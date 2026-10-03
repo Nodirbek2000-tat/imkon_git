@@ -1,9 +1,15 @@
+import secrets
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
 from apps.accounts.models import User
-from apps.artisans.models import ArtisanApplication
+from apps.artisans.models import (
+    SCHOOL_LOGIN_VALIDATOR,
+    ArtisanApplication,
+    SchoolProfile,
+)
 from apps.auctions.models import Auction
 from apps.catalog.models import Product
 from apps.payments.models import PaymentCard
@@ -193,6 +199,9 @@ class StatsSerializer(serializers.Serializer):
     artisans_total = serializers.IntegerField()
     admins_total = serializers.IntegerField()
 
+    schools_total = serializers.IntegerField()
+    students_total = serializers.IntegerField()
+
     applications_pending = serializers.IntegerField()
     applications_total = serializers.IntegerField()
 
@@ -202,3 +211,97 @@ class StatsSerializer(serializers.Serializer):
     auctions_live = serializers.IntegerField()
     auctions_total = serializers.IntegerField()
     bids_total = serializers.IntegerField()
+
+
+# ====================================================================
+#                       MAKTABLAR (admin panel)
+# ====================================================================
+
+# Chalkashtirib bo'lmaydigan alifbo: 0/O, 1/l/I yo'q. Parolni admin
+# maktabga telefonda aytib berishi ham mumkin — xato terilmasin.
+PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def generate_password(length: int = 10) -> str:
+    """Maktab uchun tasodifiy parol."""
+    return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(length))
+
+
+class AdminSchoolSerializer(serializers.ModelSerializer):
+    """Admin ko'radigan maktab — ro'yxatda va tahrirlashda."""
+
+    # `set_active()` ikkalasini birga o'zgartiradi; admin panelda ikkisi
+    # ham ko'rinib tursin — qo'lda buzilgan holat yashirin qolmasin
+    can_login = serializers.BooleanField(source="user.is_active", read_only=True)
+
+    # Ataylab ochiq e'lon qilingan: ModelSerializer avtomatik olganda
+    # modeldagi regex validator XOM qiymatga qo'llanadi va admin loginni
+    # "15-Maktab " deb kiritsa (bosh harf, bo'sh joy) — xato chiqadi.
+    # Bu yerda avval `validate_login` tozalaydi, keyin tekshiradi.
+    login = serializers.CharField(max_length=40)
+
+    class Meta:
+        model = SchoolProfile
+        fields = (
+            "id", "slug", "login",
+            "name_uz", "name_ru", "name_en",
+            "about_uz", "about_ru", "about_en",
+            "region", "district", "contact_phone",
+            "logo", "banner",
+            "students_count", "is_active", "can_login", "created_at",
+        )
+        read_only_fields = ("id", "slug", "students_count", "created_at")
+
+    def validate_login(self, value):
+        login = value.strip().lower()
+        SCHOOL_LOGIN_VALIDATOR(login)
+
+        taken = SchoolProfile.objects.filter(login=login)
+        if self.instance is not None:
+            taken = taken.exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise serializers.ValidationError("Bu login band. Boshqasini tanlang.")
+        return login
+
+
+class AdminSchoolCreateSerializer(AdminSchoolSerializer):
+    """
+    Admin yangi maktab ochadi va unga login/parol beradi.
+
+    Parol bo'sh qoldirilsa — o'zi yaratiladi. Javobda u BIR MARTA ochiq
+    ko'rinadi (bazada faqat hash saqlanadi), admin uni maktabga beradi.
+    """
+
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=72
+    )
+
+    class Meta(AdminSchoolSerializer.Meta):
+        fields = AdminSchoolSerializer.Meta.fields + ("password",)
+
+    def validate_password(self, value):
+        password = (value or "").strip()
+        if password and len(password) < 6:
+            raise serializers.ValidationError("Parol kamida 6 belgidan bo'lishi kerak.")
+        return password
+
+    @transaction.atomic
+    def create(self, validated_data):
+        password = validated_data.pop("password", "") or generate_password()
+
+        # `create_user` ishlatilmaydi: u telefon yoki Google akkaunt talab
+        # qiladi, maktabda ikkalasi ham yo'q — u faqat login/parol bilan
+        # kiradi (`SchoolLoginView`).
+        user = User(
+            phone=None,
+            role=User.Role.SCHOOL,
+            full_name=validated_data["name_uz"][:120],
+        )
+        user.set_password(password)
+        user.save()
+
+        school = SchoolProfile.objects.create(user=user, **validated_data)
+
+        # Ochiq parolni view javobga qo'shishi uchun — bazaga YOZILMAYDI
+        school.plain_password = password
+        return school

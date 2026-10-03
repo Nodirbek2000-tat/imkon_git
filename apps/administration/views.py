@@ -5,13 +5,18 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.generics import ListAPIView, ListCreateAPIView
+from rest_framework.generics import (
+    ListAPIView,
+    ListCreateAPIView,
+    RetrieveUpdateAPIView,
+)
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from apps.accounts.sms import SMSError, send_sms
-from apps.artisans.models import ArtisanApplication, ArtisanProfile
+from apps.artisans.models import ArtisanApplication, ArtisanProfile, SchoolProfile
+from apps.artisans.serializers import StudentSerializer
 from apps.auctions.models import Auction, Bid
 from apps.catalog.models import Product
 from apps.notifications.models import Notification
@@ -22,11 +27,14 @@ from .serializers import (
     AdminApplicationSerializer,
     AdminAuctionSerializer,
     AdminPaymentCardSerializer,
+    AdminSchoolCreateSerializer,
+    AdminSchoolSerializer,
     AdminUserSerializer,
     AuctionCandidateSerializer,
     AuctionCreateSerializer,
     ReviewApplicationSerializer,
     StatsSerializer,
+    generate_password,
 )
 
 
@@ -71,6 +79,10 @@ class StatsView(APIView):
             **product_stats,
             **auction_stats,
             "bids_total": Bid.objects.count(),
+            "schools_total": SchoolProfile.objects.filter(is_active=True).count(),
+            "students_total": ArtisanProfile.objects.filter(
+                kind=ArtisanProfile.Kind.STUDENT, is_active=True
+            ).count(),
         }
         return Response(StatsSerializer(data).data)
 
@@ -87,8 +99,12 @@ class AdminUserListView(ListAPIView):
     def get_queryset(self):
         queryset = User.objects.select_related("artisan_profile")
 
+        # Barcha maqomlar — maktab va o'quvchi ham. Avval ro'yxat ikkitasi
+        # bilan cheklangan edi: `?role=school` jimgina e'tiborsiz qolib,
+        # server BUTUN ro'yxatni qaytarardi va admin panelda noto'g'ri
+        # natija ko'rinardi (30 o'quvchi kiritilgandan keyin bu sezilarli).
         role = self.request.query_params.get("role")
-        if role in (User.Role.USER, User.Role.ARTISAN):
+        if role in User.Role.values:
             queryset = queryset.filter(role=role)
 
         if self.request.query_params.get("admins") == "1":
@@ -444,3 +460,143 @@ def cancel_auction(request, pk):
     auction.save(update_fields=["status", "updated_at"])
 
     return Response({"detail": "Auksion bekor qilindi."})
+
+
+# ====================================================================
+#                       MAKTABLAR (admin panel)
+# ====================================================================
+
+
+class AdminSchoolListView(ListCreateAPIView):
+    """
+    GET  — maktablar ro'yxati (`?search=`, `?active=1`)
+    POST — yangi maktab ochish, login/parol bilan
+
+    Ariza yo'q, tasdiqlash yo'q: admin formani to'ldiradi va maktab shu
+    zahoti ishlay boshlaydi.
+    """
+
+    permission_classes = (IsPlatformAdmin,)
+    pagination_class = None  # maktablar soni katta bo'lmaydi
+    search_fields = ("name_uz", "login", "region", "district")
+    ordering_fields = ("name_uz", "students_count", "created_at")
+    ordering = ("name_uz",)
+
+    def get_queryset(self):
+        queryset = SchoolProfile.objects.select_related("user")
+
+        active = self.request.query_params.get("active")
+        if active == "1":
+            queryset = queryset.filter(is_active=True)
+        elif active == "0":
+            queryset = queryset.filter(is_active=False)
+
+        return queryset
+
+    def get_serializer_class(self):
+        return (
+            AdminSchoolCreateSerializer
+            if self.request.method == "POST"
+            else AdminSchoolSerializer
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = AdminSchoolCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        school = serializer.save()
+
+        # Parol javobda FAQAT shu yerda, bir marta ko'rinadi — bazada
+        # hash saqlanadi, keyin uni hech kim (admin ham) ko'ra olmaydi.
+        # Yo'qolsa — "Parolni yangilash" tugmasi yangisini beradi.
+        return Response(
+            {
+                "detail": "Maktab ochildi. Login va parolni maktabga topshiring.",
+                "school": AdminSchoolSerializer(school).data,
+                "login": school.login,
+                "password": school.plain_password,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminSchoolDetailView(RetrieveUpdateAPIView):
+    """
+    Maktabni ko'rish va tahrirlash.
+
+    O'chirish YO'Q: maktabda o'quvchilar bor, ularda mahsulot va buyurtma
+    tarixi bor (`SchoolProfile` ga `PROTECT` qo'yilgani ham shundan).
+    O'rniga "Faolsizlantirish" — maktab kira olmaydi, ma'lumot qoladi.
+    """
+
+    serializer_class = AdminSchoolSerializer
+    permission_classes = (IsPlatformAdmin,)
+
+    def get_queryset(self):
+        return SchoolProfile.objects.select_related("user")
+
+
+@api_view(["POST"])
+@permission_classes([IsPlatformAdmin])
+def reset_school_password(request, pk):
+    """
+    Maktabga yangi parol beradi.
+
+    Parol yuborilmasa — o'zi yaratiladi. Javobda bir marta ochiq
+    ko'rinadi; eski parol shu zahoti ishlamay qoladi.
+    """
+    school = SchoolProfile.objects.select_related("user").filter(pk=pk).first()
+    if school is None:
+        return Response({"detail": "Maktab topilmadi."}, status=status.HTTP_404_NOT_FOUND)
+
+    password = (request.data.get("password") or "").strip() or generate_password()
+    if len(password) < 6:
+        return Response(
+            {"password": ["Parol kamida 6 belgidan bo'lishi kerak."]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    school.user.set_password(password)
+    school.user.save(update_fields=["password", "updated_at"])
+
+    return Response(
+        {
+            "detail": "Yangi parol yaratildi. Maktabga topshiring.",
+            "login": school.login,
+            "password": password,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsPlatformAdmin])
+def toggle_school_active(request, pk):
+    """Maktabni yoqish/o'chirish — sahifa ham, login ham birga."""
+    school = SchoolProfile.objects.select_related("user").filter(pk=pk).first()
+    if school is None:
+        return Response({"detail": "Maktab topilmadi."}, status=status.HTTP_404_NOT_FOUND)
+
+    school.set_active(not school.is_active)
+
+    return Response(
+        {
+            "detail": "Maktab faollashtirildi." if school.is_active else "Maktab o'chirildi.",
+            "school": AdminSchoolSerializer(school).data,
+        }
+    )
+
+
+class AdminSchoolStudentListView(ListAPIView):
+    """Bitta maktabning o'quvchilari — admin ko'rishi uchun."""
+
+    serializer_class = StudentSerializer
+    permission_classes = (IsPlatformAdmin,)
+    pagination_class = None
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ArtisanProfile.objects.none()
+        return (
+            ArtisanProfile.objects.filter(school_id=self.kwargs["pk"])
+            .select_related("user")
+            .order_by("user__full_name")
+        )

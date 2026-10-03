@@ -128,14 +128,17 @@ class Auction(TimeStampedModel):
         with transaction.atomic():
             auction = (
                 cls.objects.select_for_update()
-                .select_related("product__artisan__user")
+                .select_related("product__artisan__user", "product__artisan__school")
                 .get(pk=auction_id)
             )
 
             if not auction.is_live:
                 raise BidError("Auksion faol emas.")
 
-            if auction.product.artisan.user_id == user.id:
+            # O'quvchining lotiga maktabning o'zi ham taklif qila olmaydi —
+            # o'z mahsulotining narxini sun'iy ko'tarish yo'li yopiq
+            artisan = auction.product.artisan
+            if user.id in (artisan.user_id, artisan.owner_user_id):
                 raise BidError("O'z lotingizga taklif qila olmaysiz.")
 
             last_bid = auction.bids.order_by("-amount").first()

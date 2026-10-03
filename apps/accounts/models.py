@@ -37,6 +37,22 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
+    def create_student(self, full_name: str, **extra):
+        """
+        Maktab o'quvchisini yaratadi.
+
+        `create_user` dan ataylab chetlab o'tilgan: u telefon yoki Google
+        akkaunt talab qiladi, o'quvchida esa ikkalasi ham yo'q. O'quvchi
+        tizimga HECH QACHON o'zi kirmaydi — uni maktab boshqaradi, akkaunt
+        esa faqat uning ishlarini egasiga bog'lab turish uchun kerak.
+        """
+        user = self.model(
+            phone=None, role=self.model.Role.STUDENT, full_name=full_name, **extra
+        )
+        user.set_unusable_password()
+        user.save(using=self._db)
+        return user
+
     def create_superuser(self, phone, password, **extra):
         extra.setdefault("is_staff", True)
         extra.setdefault("is_superuser", True)
@@ -60,6 +76,11 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     class Role(models.TextChoices):
         USER = "user", "Foydalanuvchi"
         ARTISAN = "artisan", "Hunarmand"
+        # Maktab — platforma admini ochadi, login/parol bilan kiradi.
+        # O'quvchi — maktab kiritadi, o'zi hech qachon kirmaydi (akkaunti
+        # faqat uning ishlarini egasiga bog'lab turish uchun).
+        SCHOOL = "school", "Maktab"
+        STUDENT = "student", "O'quvchi"
 
     # Google orqali kirganlarda raqam bo'lmasligi mumkin — keyin profildan
     # qo'shiladi. Shuning uchun null, lekin bo'lsa — yagona.
@@ -111,6 +132,14 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     @property
     def is_artisan(self) -> bool:
         return self.role == self.Role.ARTISAN
+
+    @property
+    def is_school(self) -> bool:
+        return self.role == self.Role.SCHOOL
+
+    @property
+    def is_student(self) -> bool:
+        return self.role == self.Role.STUDENT
 
     def promote_to_artisan(self):
         """Ariza tasdiqlangach chaqiriladi."""

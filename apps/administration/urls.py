@@ -28,4 +28,22 @@ urlpatterns = [
     ),
     path("auctions/<int:pk>/finalize/", views.finalize_auction, name="finalize"),
     path("auctions/<int:pk>/cancel/", views.cancel_auction, name="cancel"),
+
+    path("schools/", views.AdminSchoolListView.as_view(), name="schools"),
+    path("schools/<int:pk>/", views.AdminSchoolDetailView.as_view(), name="school"),
+    path(
+        "schools/<int:pk>/students/",
+        views.AdminSchoolStudentListView.as_view(),
+        name="school-students",
+    ),
+    path(
+        "schools/<int:pk>/password/",
+        views.reset_school_password,
+        name="school-password",
+    ),
+    path(
+        "schools/<int:pk>/toggle-active/",
+        views.toggle_school_active,
+        name="school-toggle-active",
+    ),
 ]

@@ -99,7 +99,11 @@ class OrderViewSet(
 
         cart_items = list(
             CartItem.objects.filter(user=request.user).select_related(
-                "product", "product__artisan"
+                "product",
+                "product__artisan",
+                "product__artisan__user",
+                # O'quvchining mahsuloti bo'lsa xabar maktabga ketadi
+                "product__artisan__school__user",
             )
         )
         if not cart_items:
@@ -146,7 +150,7 @@ class OrderViewSet(
         # sotuvchidan xarid qilingan bo'lishi mumkin
         notified = {buyer.id}
         for item in cart_items:
-            artisan_user = item.product.artisan.user
+            artisan_user = item.product.artisan.owner_user
             if artisan_user.id in notified:
                 continue
             notified.add(artisan_user.id)

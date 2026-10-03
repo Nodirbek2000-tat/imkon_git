@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models.signals import post_delete, post_save, pre_save
+from django.dispatch import receiver
 from django.utils.text import slugify
 
 from apps.artisans.models import ArtisanProfile
@@ -38,7 +40,19 @@ class Category(TranslatedModelMixin, TimeStampedModel):
 
 class ProductQuerySet(models.QuerySet):
     def published(self):
-        return self.filter(status=Product.Status.ACTIVE, artisan__is_active=True)
+        """
+        Katalogda ko'rinadigan mahsulotlar.
+
+        `exclude` dagi shart o'quvchilar uchun: maktab o'chirilsa uning
+        bolalari ham sotmasligi kerak. Aks holda to'lov o'chirilgan
+        maktabning balansiga tushib ketardi — uni hech kim ola olmaydi.
+        `exclude` ataylab (`filter` emas): oddiy hunarmandda `school`
+        NULL, NULL esa `is_active=False` ga mos kelmaydi, shuning uchun
+        ular o'z joyida qoladi.
+        """
+        return self.filter(
+            status=Product.Status.ACTIVE, artisan__is_active=True
+        ).exclude(artisan__school__is_active=False)
 
     def with_relations(self):
         """
@@ -196,3 +210,44 @@ class ProductImage(models.Model):
 
     def __str__(self):
         return f"{self.product.title_uz} — rasm"
+
+
+# ------------------------------------------------------------------ sanoqlar
+#
+# `ArtisanProfile.products_count` — har so'rovda COUNT(*) qilmaslik uchun
+# saqlangan son. Avval uni FAQAT `seed` buyrug'i yozardi, ya'ni saytdan
+# qo'yilgan mahsulot sanoqqa umuman tushmasdi: hunarmand (va maktab
+# o'quvchisi) sahifasi ishlarni ro'yxatda ko'rsatib turib "Ish 0" derdi.
+
+
+@receiver(pre_save, sender=Product)
+def _remember_previous_artisan(sender, instance, **kwargs):
+    """
+    Mahsulot egasi o'zgarishi mumkin (maktab ishni boshqa o'quvchisiga
+    o'tkazganda). Shunda ESKI egadan ham bitta ayirish kerak — uning
+    id'sini saqlab qo'yamiz.
+    """
+    if not instance.pk:
+        instance._previous_artisan_id = None
+        return
+    instance._previous_artisan_id = (
+        Product.objects.filter(pk=instance.pk)
+        .values_list("artisan_id", flat=True)
+        .first()
+    )
+
+
+@receiver([post_save, post_delete], sender=Product)
+def _sync_products_count(sender, instance, **kwargs):
+    """
+    Faqat ACTIVE mahsulotlar sanaladi — hunarmand sahifasida ham aynan
+    shular ko'rinadi (`ProductQuerySet.published()`). Qoralama va sotilgan
+    ishni sanasak, ro'yxatdagi karta soni bilan raqam mos kelmay qolardi.
+    """
+    touched = {instance.artisan_id, getattr(instance, "_previous_artisan_id", None)}
+    for artisan_id in filter(None, touched):
+        ArtisanProfile.objects.filter(pk=artisan_id).update(
+            products_count=Product.objects.filter(
+                artisan_id=artisan_id, status=Product.Status.ACTIVE
+            ).count()
+        )

@@ -5,7 +5,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
-from apps.artisans.views import ArtisanViewSet, PostViewSet
+from apps.artisans.views import ArtisanViewSet, PostViewSet, SchoolViewSet
 from apps.auctions.views import AuctionViewSet
 from apps.catalog.views import CategoryViewSet, ProductViewSet
 from apps.orders.views import CartViewSet, OrderViewSet
@@ -15,6 +15,7 @@ router = DefaultRouter()
 router.register("products", ProductViewSet, basename="product")
 router.register("categories", CategoryViewSet, basename="category")
 router.register("artisans", ArtisanViewSet, basename="artisan")
+router.register("schools", SchoolViewSet, basename="school")
 router.register("posts", PostViewSet, basename="post")
 router.register("auctions", AuctionViewSet, basename="auction")
 router.register("cart", CartViewSet, basename="cart")

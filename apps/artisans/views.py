@@ -1,13 +1,18 @@
-from django.db.models import F
+from django.db.models import Count, F, Prefetch, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveUpdateAPIView
+from rest_framework.generics import (
+    CreateAPIView,
+    ListAPIView,
+    ListCreateAPIView,
+    RetrieveUpdateAPIView,
+)
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.permissions import IsArtisan
+from apps.common.permissions import IsArtisan, IsSchool
 
-from .models import ArtisanApplication, ArtisanProfile, Craft, Post, PostLike
+from .models import ArtisanApplication, ArtisanProfile, Craft, Post, PostLike, SchoolProfile
 from .serializers import (
     ApplicationSerializer,
     ArtisanDetailSerializer,
@@ -16,6 +21,11 @@ from .serializers import (
     CraftSerializer,
     PostCreateSerializer,
     PostSerializer,
+    SchoolDetailSerializer,
+    SchoolListSerializer,
+    SchoolUpdateSerializer,
+    StudentSerializer,
+    StudentWriteSerializer,
 )
 
 
@@ -39,11 +49,26 @@ class ArtisanViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ("-created_at",)
 
     def get_queryset(self):
-        return (
+        queryset = (
             ArtisanProfile.objects.filter(is_active=True)
-            .select_related("user")
+            # Maktab o'chirilsa uning o'quvchilari sahifasi ham yopiladi.
+            # `exclude` — oddiy hunarmandda `school` NULL va u shartga
+            # tushmaydi, ya'ni hunarmandlar bunga sezgir emas.
+            .exclude(school__is_active=False)
+            .select_related("user", "school")
             .prefetch_related("crafts")
         )
+
+        # RO'YXATDA faqat hunarmandlar. O'quvchilar "Hunarmandlar"
+        # bo'limida chiqmaydi — ular maktab sahifasida ko'rinadi.
+        #
+        # `retrieve` da esa filtr QO'YILMAYDI: o'quvchining o'z sahifasi
+        # (`/hunarmand/<slug>`) ochilishi kerak, aks holda mahsulot
+        # kartasidagi havola 404 berardi.
+        if self.action == "list":
+            queryset = queryset.filter(kind=ArtisanProfile.Kind.ARTISAN)
+
+        return queryset
 
     def get_serializer_class(self):
         return ArtisanDetailSerializer if self.action == "retrieve" else ArtisanListSerializer
@@ -73,6 +98,146 @@ class ApplicationView(CreateAPIView, ListAPIView):
         if getattr(self, "swagger_fake_view", False) or not self.request.user.is_authenticated:
             return ArtisanApplication.objects.none()
         return ArtisanApplication.objects.filter(user=self.request.user).select_related("craft")
+
+
+# ====================================================================
+#                             MAKTABLAR
+# ====================================================================
+
+
+class SchoolViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    GET /api/schools/          — maktablar ro'yxati
+    GET /api/schools/{slug}/   — maktab sahifasi, o'quvchilari bilan
+    """
+
+    permission_classes = (AllowAny,)
+    lookup_field = "slug"
+    search_fields = ("name_uz", "name_ru", "name_en", "region", "district")
+    ordering_fields = ("name_uz", "students_count", "created_at")
+    ordering = ("name_uz",)
+
+    def get_queryset(self):
+        queryset = SchoolProfile.objects.filter(is_active=True).annotate(
+            # Ommaviy sahifada yashirilgan o'quvchi sanalmaydi — serializer
+            # shu annotatsiyani o'qiydi (izohi `SchoolListSerializer` da)
+            visible_students=Count("students", filter=Q(students__is_active=True))
+        )
+
+        if self.action == "retrieve":
+            # O'quvchilarni bitta so'rov bilan olamiz — har biri uchun
+            # alohida so'rov ketsa sahifa N+1 bo'lib sekinlashardi
+            students = ArtisanProfile.objects.select_related("user").order_by(
+                "user__full_name"
+            )
+            queryset = queryset.prefetch_related(
+                Prefetch("students", queryset=students)
+            )
+
+        return queryset
+
+    def get_serializer_class(self):
+        return SchoolDetailSerializer if self.action == "retrieve" else SchoolListSerializer
+
+
+class MySchoolView(RetrieveUpdateAPIView):
+    """Maktab o'z sahifasini ko'radi va tahrirlaydi."""
+
+    serializer_class = SchoolUpdateSerializer
+    permission_classes = (IsSchool,)
+
+    def get_object(self):
+        return self.request.user.school_profile
+
+
+class SchoolStudentListView(ListCreateAPIView):
+    """
+    GET  /api/school/students/ — maktabning o'z o'quvchilari
+    POST /api/school/students/ — yangi o'quvchi (tasdiqlashsiz, darhol)
+    """
+
+    permission_classes = (IsSchool,)
+    pagination_class = None  # maktabda o'quvchi ko'p bo'lmaydi
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ArtisanProfile.objects.none()
+        # `school__user` orqali — maktab FAQAT o'z o'quvchilarini ko'radi
+        return (
+            ArtisanProfile.objects.filter(school__user=self.request.user)
+            .select_related("user")
+            .order_by("user__full_name")
+        )
+
+    def get_serializer_class(self):
+        return StudentWriteSerializer if self.request.method == "POST" else StudentSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        user = self.request.user
+        if user.is_authenticated and getattr(user, "is_school", False):
+            context["school"] = user.school_profile
+        return context
+
+    def create(self, request, *args, **kwargs):
+        serializer = StudentWriteSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save()
+
+        # Javobda O'QISH serializeri — frontend ro'yxatga shu zahoti
+        # qo'sha oladi, qayta so'rov yubormasdan
+        return Response(
+            StudentSerializer(profile, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SchoolStudentDetailView(RetrieveUpdateAPIView):
+    """
+    Bitta o'quvchini ko'rish/tahrirlash.
+
+    O'chirish YO'Q: o'chirish bolaning mahsulotlarini, ular orqali
+    buyurtma tarixini ham olib ketardi. O'rniga `is_active=false` —
+    o'quvchi sahifalardan yo'qoladi, ma'lumot esa joyida qoladi.
+    """
+
+    permission_classes = (IsSchool,)
+    lookup_field = "slug"
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ArtisanProfile.objects.none()
+        return ArtisanProfile.objects.filter(
+            school__user=self.request.user
+        ).select_related("user")
+
+    def get_serializer_class(self):
+        if self.request.method in ("PUT", "PATCH"):
+            return StudentWriteSerializer
+        return StudentSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        user = self.request.user
+        if user.is_authenticated and getattr(user, "is_school", False):
+            context["school"] = user.school_profile
+        return context
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = StudentWriteSerializer(
+            instance,
+            data=request.data,
+            partial=request.method == "PATCH",
+            context=self.get_serializer_context(),
+        )
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save()
+        return Response(
+            StudentSerializer(profile, context=self.get_serializer_context()).data
+        )
 
 
 class PostViewSet(viewsets.ModelViewSet):

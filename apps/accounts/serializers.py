@@ -7,9 +7,14 @@ class UserSerializer(serializers.ModelSerializer):
     """Profil — o'z akkauntini ko'rish va tahrirlash."""
 
     is_artisan = serializers.BooleanField(read_only=True)
+    is_school = serializers.BooleanField(read_only=True)
+    is_student = serializers.BooleanField(read_only=True)
     # Admin panel havolasi shu bayroqqa qarab ko'rsatiladi
     is_admin = serializers.BooleanField(source="is_staff", read_only=True)
     artisan_slug = serializers.SerializerMethodField()
+    # Maktab akkauntining o'z ommaviy sahifasiga havola
+    school_slug = serializers.SerializerMethodField()
+    school_name = serializers.SerializerMethodField()
     # Xom google_id/telegram_id/parol hech qachon clientga chiqmaydi — faqat holat
     has_google = serializers.SerializerMethodField()
     has_telegram = serializers.SerializerMethodField()
@@ -20,6 +25,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = (
             "id", "phone", "full_name", "avatar", "bio", "email",
             "role", "is_artisan", "is_admin", "artisan_slug",
+            "is_school", "is_student", "school_slug", "school_name",
             "language", "is_phone_verified", "created_at",
             "has_google", "has_telegram", "telegram_username", "has_password",
         )
@@ -29,6 +35,15 @@ class UserSerializer(serializers.ModelSerializer):
         # `artisan_profile` select_related bilan oldindan yuklanadi
         profile = getattr(obj, "artisan_profile", None)
         return profile.slug if profile else None
+
+    def get_school_slug(self, obj) -> str | None:
+        # `school_profile` ham select_related bilan oldindan yuklanadi
+        profile = getattr(obj, "school_profile", None)
+        return profile.slug if profile else None
+
+    def get_school_name(self, obj) -> str | None:
+        profile = getattr(obj, "school_profile", None)
+        return profile.name_uz if profile else None
 
     def get_has_google(self, obj) -> bool:
         return bool(obj.google_id)
@@ -88,6 +103,24 @@ class BotLoginCodeSerializer(serializers.Serializer):
 class PasswordLoginSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=13, validators=[PHONE_VALIDATOR])
     password = serializers.CharField()
+
+
+class SchoolLoginSerializer(serializers.Serializer):
+    """
+    Maktab login + parol bilan kiradi.
+
+    Telefon ham, SMS ham yo'q: maktabda bitta umumiy akkaunt bo'ladi va
+    unda ishlaydigan odam o'zgarib turadi — shaxsiy raqamga bog'lash
+    noto'g'ri bo'lardi. Login/parolni platforma admini beradi.
+    """
+
+    login = serializers.CharField(max_length=40)
+    password = serializers.CharField()
+
+    def validate_login(self, value: str) -> str:
+        # Maktab xodimi loginni bosh harf bilan yoki bo'sh joy bilan terishi
+        # mumkin — bu xato emas, tozalab olamiz
+        return value.strip().lower()
 
 
 class SetPasswordSerializer(serializers.Serializer):

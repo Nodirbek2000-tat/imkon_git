@@ -9,6 +9,7 @@ from apps.artisans.models import (
     SCHOOL_LOGIN_VALIDATOR,
     ArtisanApplication,
     SchoolProfile,
+    normalize_school_login,
 )
 from apps.auctions.models import Auction
 from apps.catalog.models import Product
@@ -253,7 +254,8 @@ class AdminSchoolSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "slug", "students_count", "created_at")
 
     def validate_login(self, value):
-        login = value.strip().lower()
+        # Frontend bilan bir xil qoida — izohi `normalize_school_login` da
+        login = normalize_school_login(value)
         SCHOOL_LOGIN_VALIDATOR(login)
 
         taken = SchoolProfile.objects.filter(login=login)

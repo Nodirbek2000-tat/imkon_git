@@ -210,7 +210,38 @@ if not DEBUG:
         },
     }
 
-MEDIA_URL = "media/"
+def _media_url() -> str:
+    """
+    Rasm manzilining boshlanishi.
+
+    MUAMMO: rasm manzilini DRF `request.build_absolute_uri()` bilan
+    quradi, ya'ni so'rov kelgan HOST'ni oladi. Django'ga so'rov esa
+    brauzerdan emas, Next.js serveridan ichki tarmoq orqali keladi —
+    `http://backend:8000`. Natijada rasmlar
+    `http://backend:8000/media/...` bo'lib chiqardi: bu nom faqat
+    Docker ichida mavjud, brauzer uni topa olmaydi va rasm ko'rinmaydi.
+
+    YECHIM: `MEDIA_URL` to'liq (domenli) manzil bo'lsa,
+    `build_absolute_uri()` unga umuman tegmaydi — tayyor manzilni
+    qaytaradi. Bitta sozlama bilan mahsulot rasmi, avatar, maktab
+    logosi — hammasi birdan tuzaladi.
+
+    Tartib: aniq `MEDIA_URL` > `FRONTEND_URL` dan olingan > nisbiy
+    `/media/` (development uchun — u yerda Django rasmni o'zi beradi).
+    """
+    explicit = env("MEDIA_URL", default="")
+    if explicit:
+        return explicit if explicit.endswith("/") else f"{explicit}/"
+
+    # Nginx `/media/` ni saytning o'z domenidan beradi, ya'ni rasm
+    # frontend bilan bir xil manzilda turadi.
+    if not DEBUG and FRONTEND_URL.startswith("https://"):
+        return f"{FRONTEND_URL.rstrip('/')}/media/"
+
+    return "/media/"
+
+
+MEDIA_URL = _media_url()
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

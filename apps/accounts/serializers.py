@@ -118,9 +118,13 @@ class SchoolLoginSerializer(serializers.Serializer):
     password = serializers.CharField()
 
     def validate_login(self, value: str) -> str:
-        # Maktab xodimi loginni bosh harf bilan yoki bo'sh joy bilan terishi
-        # mumkin — bu xato emas, tozalab olamiz
-        return value.strip().lower()
+        # Maktab xodimi loginni bosh harf bilan yoki bo'sh joy bilan
+        # terishi mumkin — bu xato emas, tozalab olamiz. Qoida admin
+        # panelidagi va brauzerdagi bilan AYNAN bir xil, aks holda
+        # qog'ozdan ko'chirilgan login topilmay qolardi.
+        from apps.artisans.models import normalize_school_login
+
+        return normalize_school_login(value)
 
 
 class SetPasswordSerializer(serializers.Serializer):

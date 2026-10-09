@@ -1,3 +1,5 @@
+import re
+
 from django.conf import settings
 from django.core.validators import RegexValidator
 from django.db import models, transaction
@@ -13,6 +15,24 @@ SCHOOL_LOGIN_VALIDATOR = RegexValidator(
     r"^[a-z0-9][a-z0-9-]{2,39}$",
     message="Login 3-40 belgi: kichik lotin harflari, raqam va chiziqcha.",
 )
+
+
+def normalize_school_login(raw: str) -> str:
+    """
+    Loginni yagona ko'rinishga keltiradi.
+
+    Frontend ham (`lib/utils.ts` dagi `normalizeSchoolLogin`) AYNAN shu
+    qoidani qo'llaydi. Ikkalasi bir xil bo'lishi SHART: aks holda
+    brauzerda "Chirchiq 15 Maktab" → "chirchiq-15-maktab" bo'lib
+    o'taveradi, API orqali esa o'sha qiymat "chirchiq 15 maktab" bo'lib
+    regexga urilib rad etilardi.
+
+    Qoida: kichik harf, bo'sh joy → chiziqcha, qolgan ruxsatsiz
+    belgilar tashlanadi, 40 belgida kesiladi.
+    """
+    lowered = (raw or "").strip().lower()
+    hyphenated = re.sub(r"\s+", "-", lowered)
+    return re.sub(r"[^a-z0-9-]", "", hyphenated)[:40]
 
 
 class Craft(TranslatedModelMixin, TimeStampedModel):

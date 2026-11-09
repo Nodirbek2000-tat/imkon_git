@@ -10,9 +10,11 @@ from apps.artisans.models import ArtisanProfile
 from apps.common.models import TimeStampedModel
 from apps.common.translation import TranslatedModelMixin
 
-# Comment `comments.py` da, Favorite `favorites.py` da — bu fayl juda uzayib ketmasin
+# Comment `comments.py` da, Favorite `favorites.py` da, Like `likes.py` da —
+# bu fayl juda uzayib ketmasin
 from .comments import Comment  # noqa: F401
 from .favorites import Favorite  # noqa: F401
+from .likes import Like  # noqa: F401
 
 
 class Category(TranslatedModelMixin, TimeStampedModel):
@@ -86,6 +88,34 @@ class ProductQuerySet(models.QuerySet):
             )
         )
 
+    def with_liked(self, user):
+        """
+        `is_liked` — joriy foydalanuvchi layk bosganmi.
+
+        Laykning SONI bu yerda hisoblanmaydi: u `Product.likes_count` da
+        tayyor turadi. `Count("likes")` qo'shsak `with_relations()` dagi
+        izohlar join'i bilan ko'payib ketardi.
+        """
+        if user is None or not user.is_authenticated:
+            return self.annotate(
+                is_liked=models.Value(False, output_field=models.BooleanField())
+            )
+        return self.annotate(
+            is_liked=models.Exists(
+                Like.objects.filter(user=user, product=models.OuterRef("pk"))
+            )
+        )
+
+    def most_liked(self):
+        """
+        "Reyting" bo'limi: eng ko'p ovoz yig'gan ish eng tepada.
+
+        Teng laykdagilar orasida yangiroq ish oldinda — tartib har
+        so'rovda bir xil bo'lishi uchun (aks holda sahifalash paytida
+        bitta mahsulot ikki sahifada chiqib qolardi).
+        """
+        return self.order_by("-likes_count", "-created_at")
+
 
 class Product(TranslatedModelMixin, TimeStampedModel):
     translated_fields = ("title", "description")
@@ -132,6 +162,11 @@ class Product(TranslatedModelMixin, TimeStampedModel):
     )
 
     views_count = models.PositiveIntegerField(default=0, editable=False)
+
+    # Ommaviy ovozlar soni. `Like` signallari yangilab turadi (`likes.py`) —
+    # "Reyting" bo'limi shu ustun bo'yicha saralaydi, shuning uchun u
+    # indekslangan va har so'rovda qayta sanalmaydi.
+    likes_count = models.PositiveIntegerField(default=0, editable=False, db_index=True)
 
     # Faqat status `SOLD`ga o'tganda o'rnatiladi (`ProductWriteSerializer.update`) —
     # "bu oy sotilgan" statistikasi uchun. `updated_at` (TimeStampedModel) buni

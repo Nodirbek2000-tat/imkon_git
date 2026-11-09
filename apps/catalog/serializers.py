@@ -58,6 +58,8 @@ class ProductListSerializer(TranslatedSerializerMixin, serializers.ModelSerializ
     rating_count = serializers.IntegerField(read_only=True, default=0)
     # `with_favorited()` annotatsiya qiladi — bu yerda hisoblanmaydi
     is_favorited = serializers.BooleanField(read_only=True, default=False)
+    # Layk: soni modelda tayyor turadi, `is_liked` ni `with_liked()` qo'yadi
+    is_liked = serializers.BooleanField(read_only=True, default=False)
 
     class Meta:
         model = Product
@@ -66,6 +68,7 @@ class ProductListSerializer(TranslatedSerializerMixin, serializers.ModelSerializ
             "price", "sale_type", "status", "stock",
             "artisan", "category", "main_image", "gallery", "has_auction",
             "created_at", "rating_avg", "rating_count", "is_favorited",
+            "likes_count", "is_liked",
         )
 
     def get_main_image(self, obj) -> dict | None:

@@ -10,6 +10,7 @@ from apps.common.permissions import IsArtisanOrSchool, IsOwnerOrReadOnly
 from apps.notifications.models import Notification
 
 from .favorites import Favorite
+from .likes import Like
 from .models import Category, Comment, Product
 from .serializers import (
     CategorySerializer,
@@ -69,11 +70,15 @@ class ProductViewSet(viewsets.ModelViewSet):
     lookup_field = "slug"
     filterset_class = ProductFilter
     search_fields = ("title_uz", "title_ru", "title_en", "artisan__shop_name_uz")
-    ordering_fields = ("price", "created_at", "views_count")
+    ordering_fields = ("price", "created_at", "views_count", "likes_count")
     ordering = ("-created_at",)
 
     def get_queryset(self):
-        base = Product.objects.with_relations().with_favorited(self.request.user)
+        base = (
+            Product.objects.with_relations()
+            .with_favorited(self.request.user)
+            .with_liked(self.request.user)
+        )
 
         # Mahsulot sahifasida auksion va xususiyatlar ham kerak
         if self.action == "retrieve":
@@ -100,11 +105,11 @@ class ProductViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         # Izohlar hammaga ochiq (POST ichida login tekshiriladi),
         # o'chirish esa login talab qiladi
-        if self.action in ("list", "retrieve", "comments"):
+        if self.action in ("list", "retrieve", "comments", "top"):
             return [AllowAny()]
         if self.action == "delete_comment":
             return [IsAuthenticated()]
-        if self.action in ("my_written_comments", "favorite", "my_favorites"):
+        if self.action in ("my_written_comments", "favorite", "my_favorites", "like"):
             return [IsAuthenticated()]
         if self.action in ("create", "my_comments", "my_stats"):
             return [IsArtisanOrSchool()]
@@ -196,6 +201,43 @@ class ProductViewSet(viewsets.ModelViewSet):
             .with_favorited(request.user)
             .filter(id__in=list(favorite_ids))
         )
+        page = self.paginate_queryset(products)
+        serializer = ProductListSerializer(page, many=True, context={"request": request})
+        return self.get_paginated_response(serializer.data)
+
+    # ------------------------------------------------------------ layklar
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
+    def like(self, request, slug=None):
+        """
+        Layk bosish/qaytarib olish — bitta so'rovda ikkalasi ham.
+
+        Yangi sonni ham qaytaramiz: frontend uni darhol ko'rsatadi va
+        ro'yxatni qaytadan yuklab o'tirmaydi. Son modelda signal orqali
+        yangilangani uchun bazadan qayta o'qiymiz.
+        """
+        product = self.get_object()
+        like, created = Like.objects.get_or_create(user=request.user, product=product)
+        if not created:
+            like.delete()
+
+        likes_count = (
+            Product.objects.filter(pk=product.pk)
+            .values_list("likes_count", flat=True)
+            .first()
+            or 0
+        )
+        return Response({"liked": created, "likes_count": likes_count})
+
+    @action(detail=False, methods=["get"], permission_classes=[AllowAny])
+    def top(self, request):
+        """
+        "Reyting" bo'limi — eng ko'p ovoz yig'gan ishlar tepada.
+
+        `filter_queryset` ATAYLAB chaqirilmaydi: u `ordering` parametrini
+        ham qo'llaydi va reyting tartibini buzib yuborardi.
+        """
+        products = self.get_queryset().most_liked()
         page = self.paginate_queryset(products)
         serializer = ProductListSerializer(page, many=True, context={"request": request})
         return self.get_paginated_response(serializer.data)
